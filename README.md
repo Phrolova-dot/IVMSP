@@ -1,4 +1,4 @@
-# IVMSP
+# Image and Video Processing Lab
 
 Image and video processing coursework scripts and generated experiment results.
 
