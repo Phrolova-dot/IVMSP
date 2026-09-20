@@ -1,3 +1,4 @@
+from pathlib import Path
 import cv2
 import select
 import sys
@@ -30,59 +31,72 @@ def draw_matches(
 
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
-    
+
 
     matches_img = np.zeros((max([h1, h2]), w1 + w2, 3), dtype="uint8")
 
-    matches_img[:h1, :w1] = np.dstack([img1,img1,img1]) 
-    matches_img[:h2, w1:] = np.dstack([img2,img2,img2])
+    matches_img[:h1, :w1] = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR) if img1.ndim == 2 else img1[:, :, :3]
+    matches_img[:h2, w1:] = cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR) if img2.ndim == 2 else img2[:, :, :3]
 
     for i in matches:
         img1_idx = i.queryIdx
         img2_idx = i.trainIdx
-        
+
         (m1, n1) = kp1[img1_idx].pt
         (m2, n2) = kp2[img2_idx].pt
-        
+
         cv2.circle(matches_img, (int(m1), int(n1)), 5, (0, 255, 0), 1)
         cv2.circle(matches_img, (int(m2) + w1, int(n2)), 5, (0, 255, 0), 1)
-        
+
         cv2.line(
-            matches_img, 
-            (int(m1), int(n1)), 
-            (int(m2) + w1, int(n2)), 
+            matches_img,
+            (int(m1), int(n1)),
+            (int(m2) + w1, int(n2)),
             (0, 255, 0), 1
         )
-        
+
     return matches_img
 
-img1 = cv2.imread("imgNBG1.png", 0) 
-img2 = cv2.imread("imgNBG2.png", 0) 
+def main():
+    img1 = cv2.imread(str(Path(__file__).with_name("imgNBG1.png")), 0)
+    img2 = cv2.imread(str(Path(__file__).with_name("imgNBG2.png")), 0)
+    if img1 is None or img2 is None:
+        raise FileNotFoundError("Place imgNBG1.png and imgNBG2.png beside this script")
 
-FEATURES = 400
-sift = cv2.SIFT_create(FEATURES)
-
-
-kp1, des1 = sift.detectAndCompute(img1, None)
-kp2, des2 = sift.detectAndCompute(img2, None) 
-
-bf = cv2.BFMatcher(cv2.NORM_L2)
-matches = bf.knnMatch(des1, des2, k=2)
-
-good_matches = []
-
-for match1, match2 in matches:
-    if match1.distance < 0.8 * match2.distance: 
-        good_matches.append(match1)
-
-print(f"Good matches with Brute-Force found: {len(good_matches)}")
+    FEATURES = 400
+    sift = cv2.SIFT_create(FEATURES)
 
 
-feat_img_a = cv2.drawKeypoints(img1, kp1, None, (0, 0, 255), 4) 
-feat_img_b = cv2.drawKeypoints(img2, kp2, None, (0, 0, 255), 4) 
-cv2.imwrite("featImgA.png", feat_img_a)
-cv2.imwrite("featImgB.png", feat_img_b)
+    kp1, des1 = sift.detectAndCompute(img1, None)
+    kp2, des2 = sift.detectAndCompute(img2, None)
+
+    if des1 is None or des2 is None:
+        raise ValueError("No usable features in one or both images")
+
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    matches = bf.knnMatch(des1, des2, k=2)
+
+    good_matches = []
+
+    for pair in matches:
+        if len(pair) < 2:
+            continue
+        match1, match2 = pair
+        if match1.distance < 0.8 * match2.distance:
+            good_matches.append(match1)
+
+    print(f"Good matches with Brute-Force found: {len(good_matches)}")
 
 
-result_matches = draw_matches(img1, kp1, img2, kp2, good_matches)
-cv2.imwrite("matches.png", result_matches)
+    feat_img_a = cv2.drawKeypoints(img1, kp1, None, (0, 0, 255), 4)
+    feat_img_b = cv2.drawKeypoints(img2, kp2, None, (0, 0, 255), 4)
+    cv2.imwrite("featImgA.png", feat_img_a)
+    cv2.imwrite("featImgB.png", feat_img_b)
+
+
+    result_matches = draw_matches(img1, kp1, img2, kp2, good_matches)
+    cv2.imwrite("matches.png", result_matches)
+
+
+if __name__ == "__main__":
+    main()

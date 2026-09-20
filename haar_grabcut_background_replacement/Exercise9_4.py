@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def grab_cut(frame: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
+def grab_cut(frame: np.ndarray, x: int, y: int, w: int, h: int, return_mask: bool = False):
     start_time = time.time() # Task: Save time before
 
     # (1) 创建 mask (uint8)
@@ -23,10 +23,10 @@ def grab_cut(frame: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
     # mask 中 0(BG) 和 2(Prob. BG) 设为 0，其余 (1, 3) 设为 1
     mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
 
-    # 将 mask 应用于图像 
+    # 将 mask 应用于图像
     frame = frame * mask2[:, :, np.newaxis]
 
     end_time = time.time() # Task: Save time after
-    # print(f"GrabCut Runtime: {end_time - start_time} seconds") 
+    # print(f"GrabCut Runtime: {end_time - start_time} seconds")
 
-    return frame
+    return (frame, mask2) if return_mask else frame

@@ -31,15 +31,15 @@ def check_and_create_image():
 def sobel_filter(
     np_img: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    
+
     assert isinstance(np_img, np.ndarray)
 
     # TODO: Use ndim.sobel
     # axis=1 检测列方向变化 (垂直边缘 Fm)
     # axis=0 检测行方向变化 (水平边缘 Fn)
     # 使用 float64 防止 uint8 溢出导致负数截断
-    fm = ndim.sobel(np_img, axis=1).astype(np.float64) # [cite: 752]
-    fn = ndim.sobel(np_img, axis=0).astype(np.float64) # [cite: 755]
+    fm = ndim.sobel(np_img, axis=1, output=np.float64) # [cite: 752]
+    fn = ndim.sobel(np_img, axis=0, output=np.float64) # [cite: 755]
 
     # TODO: Magnitude
     magnitude = np.sqrt(fm**2 + fn**2) # [cite: 758]
@@ -75,7 +75,7 @@ def edge_detector(
 # ==========================================
 if __name__ == "__main__":
     img_path = check_and_create_image()
-    
+
     # 加载图像 [cite: 797-801]
     gray_img = np.array(
         Image.open(img_path).convert("L"),
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     dm = np.array([[-1, 0, 1],
                    [-2, 0, 2],
                    [-1, 0, 1]])
-    
+
     # Standard Sobel Dn (Horizontal Edges) [cite: 709]
     dn = np.array([[-1, -2, -1],
                    [0,  0,  0],
@@ -119,20 +119,20 @@ if __name__ == "__main__":
         (fm2, fn2, magnitude2, phase2, "Sobel 2"),
         (fm3, fn3, magnitude3, phase3, "Sobel 3")
     ]
-    
+
     row_titles = ["", "Fm Vertical Edges", "Fn Horizontal Edges", "Absolute Value", "Phase"]
-    
+
     plt.figure(figsize=(10, 15))
-    
+
     for col in range(3):
         fm, fn, mag, pha, title = results[col]
         imgs = [gray_img, fm, fn, mag, pha]
-        
+
         for row in range(5):
             plt.subplot(5, 3, row * 3 + col + 1)
             plt.imshow(imgs[row], cmap="gray")
             plt.axis("off")
-            
+
             # 设置标题
             if row == 0:
                 plt.title(title)

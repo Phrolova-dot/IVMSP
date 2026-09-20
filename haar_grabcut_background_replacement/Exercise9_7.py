@@ -4,7 +4,7 @@ import time
 
 # --- 步骤 1: 放入之前写的辅助函数 ---
 
-def grab_cut(frame, x, y, w, h):
+def grab_cut(frame, x, y, w, h, return_mask=False):
     start_time = time.time() # Task: Save time before
 
     # (1) 创建 mask (uint8)
@@ -25,109 +25,86 @@ def grab_cut(frame, x, y, w, h):
     # mask 中 0(BG) 和 2(Prob. BG) 设为 0，其余 (1, 3) 设为 1
     mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
 
-    # 将 mask 应用于图像 
+    # 将 mask 应用于图像
     frame = frame * mask2[:, :, np.newaxis]
 
     end_time = time.time() # Task: Save time after
-    # print(f"GrabCut Runtime: {end_time - start_time} seconds") 
+    # print(f"GrabCut Runtime: {end_time - start_time} seconds")
 
-    return frame
+    return (frame, mask2) if return_mask else frame
 
-def add_alpha_channel(img):
-    start_time = time.time()
+def add_alpha_channel(img, mask):
+    """Build alpha from a segmentation mask, preserving black foreground pixels."""
+    if mask.shape != img.shape[:2]:
+        raise ValueError("Mask and image dimensions must match")
+    result = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    result[:, :, 3] = (mask != 0).astype(np.uint8) * 255
+    return result
 
-    # (1) 颜色空间转换 BGR -> BGRA 
-    # 这会自动添加全不透明 (255) 的 Alpha 通道 
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
 
-    # 找到黑色像素 [0, 0, 0] 并将其 Alpha 通道设为 0 (透明) 
-    # 检查前三个通道是否都为 0
-    black_pixels = np.all(img[:, :, :3] == 0, axis=2)
-    img[black_pixels, 3] = 0
-
-    end_time = time.time()
-    # print(f"Add Alpha Runtime: {end_time - start_time} seconds")
-
-    return img
 def paste_image(ag_img, b_img, x, y, w, h):
-    for c in range(0, 3):
-        # 逐像素混合：Out = Alpha * FG + (1 - Alpha) * BG
-        b_img[y:y+h, x:x+w, c] = (alpha_ag * fg_crop[:, :, c] +
-                                  alpha_b * roi[:, :, c])
-
+    """Composite matching full-frame foreground and background arrays."""
+    if ag_img.shape[:2] != b_img.shape[:2]:
+        raise ValueError("Foreground and background dimensions must match")
+    height, width = b_img.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(width, x + w), min(height, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return b_img
+    fg_crop = ag_img[y0:y1, x0:x1]
+    roi = b_img[y0:y1, x0:x1]
+    alpha = fg_crop[:, :, 3:4].astype(np.float64) / 255.0
+    b_img[y0:y1, x0:x1] = np.rint(alpha * fg_crop[:, :, :3] + (1-alpha) * roi).astype(np.uint8)
     return b_img
 
-# --- 步骤 2: 编写主函数 (Exercise 9.7) ---
 
-def background_replacement(input_video_path, background_video_path, weightsfile):
-    
-    # (1) 初始化视频捕获对象 [cite: 1107, 1156]
-    cap = cv2.VideoCapture(input_video_path)
-    background_cap = cv2.VideoCapture(background_video_path)
+def background_replacement(input_video_path, background_video_path, weightsfile,
+                           output_path="output_final.mp4"):
+    classifier = cv2.CascadeClassifier(str(weightsfile))
+    if classifier.empty():
+        raise ValueError(f"Cannot load classifier: {weightsfile}")
+    cap = cv2.VideoCapture(str(input_video_path))
+    background_cap = cv2.VideoCapture(str(background_video_path))
+    out = None
+    try:
+        if not cap.isOpened() or not background_cap.isOpened():
+            raise OSError("Cannot open foreground or background video")
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if width <= 0 or height <= 0 or not np.isfinite(fps) or fps <= 0:
+            raise ValueError("Invalid input video dimensions or frame rate")
+        out = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                              fps, (width, height))
+        if not out.isOpened():
+            raise OSError(f"Cannot open output video: {output_path}")
+        # Pair frames by index and stop at the shorter input.
+        while True:
+            ok, frame = cap.read()
+            bg_ok, background = background_cap.read()
+            if not ok or not bg_ok:
+                break
+            background = cv2.resize(background, (width, height))
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            for x, y, w, h in classifier.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)):
+                cutout, mask = grab_cut(frame, x, y, w, h, return_mask=True)
+                background = paste_image(add_alpha_channel(cutout, mask),
+                                         background, x, y, w, h)
+            out.write(background)
+    finally:
+        cap.release()
+        background_cap.release()
+        if out is not None:
+            out.release()
 
-    # (2) 初始化分类器 [cite: 1109, 1157]
-    object_classifier = cv2.CascadeClassifier(weightsfile)
 
-    frame_counter = 0
-
-    # (3) 初始化视频写入器 (VideoWriter) [cite: 1118-1120, 1158]
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # 注意：如果背景视频尺寸不同，可能需要 resize，或者在这里以背景视频尺寸为准
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v") 
-    out = cv2.VideoWriter("output_final.mp4", fourcc, 10.0, (width, height))
-
-    # (4) 确定最大帧数 [cite: 1123, 1159]
-    # 输出视频长度受限于两个输入视频中较短的那个
-    len_input = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    len_bg = int(background_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    max_frames = min(len_input, len_bg)
-
-    print(f"Starting processing for {max_frames} frames...")
-
-    # --- 步骤 3: 主循环处理 ---
-    while frame_counter < max_frames:
-        
-        # 读取两路视频的帧 [cite: 1129-1130]
-        ret, frame = cap.read()
-        success, background_frame = background_cap.read()
-
-        if not ret or not success:
-            break
-
-        # 转换为灰度图用于 Haar 检测 [cite: 1131]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # 检测对象 (人脸/人) [cite: 1139]
-        detected_objects = object_classifier.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-        )
-
-        # (5) 核心整合步骤：对检测到的对象执行替换流程 [cite: 1140, 1161]
-        for x, y, w, h in detected_objects:
-            # A. 使用 GrabCut 提取前景
-            cutout = grab_cut(frame, x, y, w, h)
-            
-            # B. 添加 Alpha 通道 (变透明)
-            cutout_alpha = add_alpha_channel(cutout)
-            
-            # C. 粘贴到背景图上
-            # 注意：这里直接修改了 background_frame
-            background_frame = paste_image(cutout_alpha, background_frame, x, y, w, h)
-
-        # 写入合成后的帧 [cite: 1150]
-        out.write(background_frame)
-        
-        frame_counter += 1
-        if frame_counter % 10 == 0:
-            print(f"Processed {frame_counter}/{max_frames} frames")
-
-    # (6) 释放所有资源 [cite: 1152-1154, 1164]
-    cap.release()
-    background_cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-    print("Done.")
-
-# --- 步骤 4: 执行程序 ---
-# background_replacement('foreground.mp4', 'background.mp4', 'haarcascade_frontalface_default.xml')
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Replace a video background with GrabCut")
+    parser.add_argument("foreground")
+    parser.add_argument("background")
+    parser.add_argument("classifier")
+    parser.add_argument("--output", default="output_final.mp4")
+    args = parser.parse_args()
+    background_replacement(args.foreground, args.background, args.classifier, args.output)
